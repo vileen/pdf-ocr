@@ -16,11 +16,20 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Ensure upload directory exists
+// Ensure directories exist
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const OUTPUT_DIR = path.join(__dirname, 'output');
+const LOGS_DIR = path.join(__dirname, 'logs');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+
+// Error logging
+function logError(message) {
+  const timestamp = new Date().toISOString();
+  const logEntry = `[${timestamp}] ${message}\n`;
+  fs.appendFileSync(path.join(LOGS_DIR, 'error.log'), logEntry);
+}
 
 // Multer configuration for large files
 const storage = multer.diskStorage({
@@ -170,6 +179,7 @@ async function processOCR(jobId, pdfPath, outputDir) {
     
   } catch (error) {
     console.error('OCR Error:', error);
+    logError(`OCR Job ${jobId} failed: ${error.message}`);
     progressMap.set(jobId, { status: 'error', progress: 0, message: error.message });
   }
 }
