@@ -9,10 +9,21 @@ const util = require('util');
 const execAsync = util.promisify(exec);
 
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 3010;
+
+// Request logging middleware (must be first!)
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - Origin: ${req.headers.origin || 'none'}`);
+  next();
+});
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['https://vileen.github.io', 'https://pdf.vileen.pl', 'http://localhost:3002'],
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
 app.use(express.static('public'));
 
@@ -78,8 +89,19 @@ async function pdfToImages(pdfPath, outputDir) {
   return images;
 }
 
+// Error handling middleware for multer
+function handleMulterError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: 'Unexpected field name. Use "pdf" as field name.' });
+    }
+    return res.status(400).json({ error: err.message });
+  }
+  next(err);
+}
+
 // OCR endpoint
-app.post('/api/ocr', upload.single('pdf'), async (req, res) => {
+app.post('/api/ocr', upload.single('pdf'), handleMulterError, async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No PDF file uploaded' });
   }
