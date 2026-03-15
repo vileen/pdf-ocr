@@ -231,6 +231,11 @@
     </div>
 
     <script>
+        // API URL configuration - use tunnel when on GitHub Pages
+        const API_URL = window.location.hostname === 'vileen.github.io' 
+            ? 'https://pdf.vileen.pl' 
+            : '';
+
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const fileInfo = document.getElementById('fileInfo');
@@ -311,7 +316,7 @@
             progressContainer.classList.add('show');
 
             try {
-                const response = await fetch('/api/ocr', {
+                const response = await fetch(`${API_URL}/api/ocr`, {
                     method: 'POST',
                     body: formData
                 });
@@ -335,7 +340,7 @@
         async function pollProgress(jobId) {
             const interval = setInterval(async () => {
                 try {
-                    const response = await fetch(`/api/progress/${jobId}`);
+                    const response = await fetch(`${API_URL}/api/progress/${jobId}`);
                     const data = await response.json();
 
                     progressFill.style.width = data.progress + '%';
@@ -359,7 +364,7 @@
 
         async function showResult(jobId) {
             try {
-                const response = await fetch(`/api/result/${jobId}`);
+                const response = await fetch(`${API_URL}/api/result/${jobId}`);
                 const data = await response.json();
                 
                 progressContainer.classList.remove('show');
@@ -372,7 +377,7 @@
 
         downloadBtn.addEventListener('click', () => {
             if (!currentJobId) return;
-            window.location.href = `/api/download/${currentJobId}`;
+            window.location.href = `${API_URL}/api/download/${currentJobId}`;
         });
 
         copyBtn.addEventListener('click', () => {
