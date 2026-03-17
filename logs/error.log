@@ -1,0 +1,3 @@
+[2026-03-16T00:12:51.592Z] OCR Job 1773619971577 failed: Command failed: pdftoppm -png -r 300 "/Users/dominiksoczewka/Projects/pdf-ocr/uploads/1773619962984-543485614-333054791-Kodansha-Kanji-Learners-Course-pdf.pdf" "/Users/dominiksoczewka/Projects/pdf-ocr/output/1773619971577/1773619962984-543485614-333054791-Kodansha-Kanji-Learners-Course-pdf-page"
+/bin/sh: pdftoppm: command not found
+

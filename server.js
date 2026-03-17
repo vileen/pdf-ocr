@@ -100,6 +100,26 @@ function handleMulterError(err, req, res, next) {
   next(err);
 }
 
+// OpenDataLoader conversion endpoint
+app.post('/api/convert', upload.single('pdf'), handleMulterError, async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded' });
+  }
+
+  const jobId = Date.now().toString();
+  const pdfPath = req.file.path;
+  const outputDir = path.join(OUTPUT_DIR, jobId);
+  
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+  
+  progressMap.set(jobId, { status: 'starting', progress: 0, message: 'Starting OpenDataLoader...' });
+  
+  // Start conversion process in background
+  processOpenDataLoader(jobId, pdfPath, outputDir);
+  
+  res.json({ jobId, message: 'OpenDataLoader conversion started' });
+});
+
 // OCR endpoint
 app.post('/api/ocr', upload.single('pdf'), handleMulterError, async (req, res) => {
   if (!req.file) {
@@ -147,6 +167,88 @@ app.get('/api/result/:jobId', (req, res) => {
   const text = fs.readFileSync(outputFile, 'utf-8');
   res.json({ text });
 });
+
+async function processOpenDataLoader(jobId, pdfPath, outputDir) {
+  try {
+    const { spawn } = require('child_process');
+    
+    progressMap.set(jobId, { status: 'processing', progress: 10, message: 'Converting with OpenDataLoader...' });
+    
+    // Run OpenDataLoader Python script
+    const pythonProcess = spawn('python', [
+      '-c',
+      `
+import sys
+sys.path.insert(0, '/Users/dominiksoczewka/Projects/speech-practice/backend/src')
+from services.pdf_converter import convert_pdf
+import json
+
+result = convert_pdf(
+    "${pdfPath}",
+    "${outputDir}",
+    format="markdown",
+    hybrid=False,
+    ocr=False
+)
+print(json.dumps(result))
+      `
+    ]);
+    
+    let output = '';
+    let errorOutput = '';
+    
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      console.error('OpenDataLoader stderr:', data.toString());
+    });
+    
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const result = JSON.parse(output);
+          if (result.success) {
+            // Read the converted content
+            const content = fs.readFileSync(result.output, 'utf-8');
+            fs.writeFileSync(path.join(outputDir, 'result.txt'), content);
+            
+            progressMap.set(jobId, { 
+              status: 'completed', 
+              progress: 100, 
+              message: 'OpenDataLoader conversion completed!',
+              totalPages: 1,
+              currentPage: 1 
+            });
+          } else {
+            throw new Error(result.error || 'Conversion failed');
+          }
+        } catch (e) {
+          console.error('OpenDataLoader error:', e);
+          progressMap.set(jobId, { status: 'error', progress: 0, message: e.message });
+        }
+      } else {
+        progressMap.set(jobId, { status: 'error', progress: 0, message: errorOutput || 'OpenDataLoader process failed' });
+      }
+      
+      // Cleanup PDF after processing
+      setTimeout(() => {
+        try {
+          fs.unlinkSync(pdfPath);
+        } catch (e) {
+          console.error('Cleanup error:', e);
+        }
+      }, 60000);
+    });
+    
+  } catch (error) {
+    console.error('OpenDataLoader Error:', error);
+    logError(`OpenDataLoader Job ${jobId} failed: ${error.message}`);
+    progressMap.set(jobId, { status: 'error', progress: 0, message: error.message });
+  }
+}
 
 async function processOCR(jobId, pdfPath, outputDir) {
   try {

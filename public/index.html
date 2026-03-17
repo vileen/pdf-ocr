@@ -149,6 +149,52 @@
             display: none;
         }
         .error.show { display: block; }
+        .backend-selector {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+        }
+        .backend-selector label {
+            display: block;
+            margin-bottom: 10px;
+            color: #ccc;
+            font-size: 0.9rem;
+        }
+        .backend-options {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .backend-option {
+            flex: 1;
+            min-width: 200px;
+            padding: 12px 15px;
+            background: rgba(255,255,255,0.05);
+            border: 2px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .backend-option:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .backend-option input {
+            display: none;
+        }
+        .backend-option.selected {
+            border-color: #e94560;
+            background: rgba(233, 69, 96, 0.1);
+        }
+        .backend-name {
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+        .backend-desc {
+            font-size: 0.8rem;
+            color: #888;
+        }
         .features {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -176,7 +222,7 @@
 <body>
     <div class="container">
         <h1>📄 PDF OCR Tool</h1>
-        <p class="subtitle">Extract text from PDF files using OCR</p>
+        <p class="subtitle">Extract text from PDF files using Tesseract.js or OpenDataLoader</p>
         
         <div class="card">
             <div class="upload-area" id="uploadArea">
@@ -188,6 +234,22 @@
             
             <div class="file-info" id="fileInfo">
                 <strong>Selected:</strong> <span id="fileName"></span> (<span id="fileSize"></span>)
+            </div>
+            
+            <div class="backend-selector" id="backendSelector">
+                <label>Select OCR Engine:</label>
+                <div class="backend-options">
+                    <label class="backend-option selected" id="tesseractOption">
+                        <input type="radio" name="backend" value="tesseract" checked>
+                        <div class="backend-name">📝 Tesseract.js</div>
+                        <div class="backend-desc">Local OCR • Best for scanned documents • Supports 100+ languages</div>
+                    </label>
+                    <label class="backend-option" id="opendataloaderOption">
+                        <input type="radio" name="backend" value="opendataloader">
+                        <div class="backend-name">🚀 OpenDataLoader</div>
+                        <div class="backend-desc">AI-powered • Better for complex layouts • Tables & formulas</div>
+                    </label>
+                </div>
             </div>
             
             <div class="error" id="error"></div>
@@ -212,6 +274,11 @@
         </div>
         
         <div class="features">
+            <div class="feature">
+                <div class="feature-icon">⚡</div>
+                <div class="feature-title">Two Engines</div>
+                <div class="feature-desc">Choose between Tesseract.js (local) or OpenDataLoader (AI-powered)</div>
+            </div>
             <div class="feature">
                 <div class="feature-icon">🔍</div>
                 <div class="feature-title">Accurate OCR</div>
@@ -251,8 +318,24 @@
         const downloadBtn = document.getElementById('downloadBtn');
         const copyBtn = document.getElementById('copyBtn');
         const newBtn = document.getElementById('newBtn');
+        const tesseractOption = document.getElementById('tesseractOption');
+        const opendataloaderOption = document.getElementById('opendataloaderOption');
 
         let currentJobId = null;
+        let selectedBackend = 'tesseract';
+
+        // Backend selection
+        tesseractOption.addEventListener('click', () => {
+            selectedBackend = 'tesseract';
+            tesseractOption.classList.add('selected');
+            opendataloaderOption.classList.remove('selected');
+        });
+
+        opendataloaderOption.addEventListener('click', () => {
+            selectedBackend = 'opendataloader';
+            opendataloaderOption.classList.add('selected');
+            tesseractOption.classList.remove('selected');
+        });
 
         // Drag & drop
         uploadArea.addEventListener('click', () => fileInput.click());
@@ -310,13 +393,19 @@
         async function uploadFile(file) {
             const formData = new FormData();
             formData.append('pdf', file);
+            formData.append('backend', selectedBackend);
 
             uploadArea.style.display = 'none';
             fileInfo.style.display = 'none';
+            document.getElementById('backendSelector').style.display = 'none';
             progressContainer.classList.add('show');
 
             try {
-                const response = await fetch(`${API_URL}/api/ocr`, {
+                const endpoint = selectedBackend === 'opendataloader' 
+                    ? `${API_URL}/api/convert` 
+                    : `${API_URL}/api/ocr`;
+                
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     body: formData
                 });

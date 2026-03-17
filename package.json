@@ -12,7 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.6",
-    "express": "^5.2.1",
+    "express": "^4.22.1",
     "multer": "^2.1.1",
     "pdf-poppler": "^0.2.3",
     "tesseract.js": "^7.0.0"
