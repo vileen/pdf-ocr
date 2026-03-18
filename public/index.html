@@ -252,6 +252,13 @@
                 </div>
             </div>
             
+            <div class="backend-selector" id="formatSelector">
+                <label>Output Format:</label>
+                <div class="backend-options" id="formatOptions">
+                    <!-- Options will be populated by JavaScript based on backend -->
+                </div>
+            </div>
+            
             <div class="error" id="error"></div>
             
             <div class="progress-container" id="progressContainer">
@@ -323,19 +330,65 @@
 
         let currentJobId = null;
         let selectedBackend = 'tesseract';
+        let selectedFormat = 'txt';
+        let currentOutputFormat = 'txt';
+
+        // Format definitions
+        const FORMATS = {
+            tesseract: [
+                { value: 'txt', name: '📝 TXT', desc: 'Plain text' },
+                { value: 'pdf', name: '📄 PDF', desc: 'Searchable PDF with text layer' }
+            ],
+            opendataloader: [
+                { value: 'markdown', name: '📝 Markdown', desc: 'Formatted text with structure' },
+                { value: 'txt', name: '📄 Text', desc: 'Plain text' },
+                { value: 'html', name: '🌐 HTML', desc: 'HTML document' },
+                { value: 'json', name: '📊 JSON', desc: 'Structured data' }
+            ]
+        };
+
+        // Format selector rendering
+        function renderFormatOptions() {
+            const container = document.getElementById('formatOptions');
+            const formats = FORMATS[selectedBackend];
+            
+            container.innerHTML = formats.map((fmt, idx) => `
+                <label class="backend-option ${idx === 0 ? 'selected' : ''}" data-format="${fmt.value}">
+                    <input type="radio" name="format" value="${fmt.value}" ${idx === 0 ? 'checked' : ''}>
+                    <div class="backend-name">${fmt.name}</div>
+                    <div class="backend-desc">${fmt.desc}</div>
+                </label>
+            `).join('');
+            
+            // Add click handlers
+            container.querySelectorAll('.backend-option').forEach(opt => {
+                opt.addEventListener('click', () => {
+                    container.querySelectorAll('.backend-option').forEach(o => o.classList.remove('selected'));
+                    opt.classList.add('selected');
+                    selectedFormat = opt.dataset.format;
+                });
+            });
+            
+            selectedFormat = formats[0].value;
+        }
 
         // Backend selection
         tesseractOption.addEventListener('click', () => {
             selectedBackend = 'tesseract';
             tesseractOption.classList.add('selected');
             opendataloaderOption.classList.remove('selected');
+            renderFormatOptions();
         });
 
         opendataloaderOption.addEventListener('click', () => {
             selectedBackend = 'opendataloader';
             opendataloaderOption.classList.add('selected');
             tesseractOption.classList.remove('selected');
+            renderFormatOptions();
         });
+
+        // Initialize format options
+        renderFormatOptions();
 
         // Drag & drop
         uploadArea.addEventListener('click', () => fileInput.click());
@@ -394,10 +447,12 @@
             const formData = new FormData();
             formData.append('pdf', file);
             formData.append('backend', selectedBackend);
+            formData.append('format', selectedFormat);
 
             uploadArea.style.display = 'none';
             fileInfo.style.display = 'none';
             document.getElementById('backendSelector').style.display = 'none';
+            document.getElementById('formatSelector').style.display = 'none';
             progressContainer.classList.add('show');
 
             try {
@@ -438,6 +493,7 @@
 
                     if (data.status === 'completed') {
                         clearInterval(interval);
+                        currentOutputFormat = data.outputFormat || 'txt';
                         showResult(jobId);
                     } else if (data.status === 'error') {
                         clearInterval(interval);
@@ -455,10 +511,20 @@
             try {
                 const response = await fetch(`${API_URL}/api/result/${jobId}`);
                 const data = await response.json();
-                
+
                 progressContainer.classList.remove('show');
                 resultContainer.classList.add('show');
                 resultText.textContent = data.text;
+
+                // Update download button based on output format
+                if (currentOutputFormat === 'pdf') {
+                    downloadBtn.textContent = '⬇️ Download PDF';
+                } else if (selectedBackend === 'opendataloader') {
+                    const formatNames = { markdown: 'MD', txt: 'TXT', html: 'HTML', json: 'JSON' };
+                    downloadBtn.textContent = `⬇️ Download ${formatNames[selectedFormat] || 'TXT'}`;
+                } else {
+                    downloadBtn.textContent = '⬇️ Download TXT';
+                }
             } catch (err) {
                 showError('Failed to load result');
             }

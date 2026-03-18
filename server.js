@@ -109,6 +109,7 @@ app.post('/api/convert', upload.single('pdf'), handleMulterError, async (req, re
   const jobId = Date.now().toString();
   const pdfPath = req.file.path;
   const outputDir = path.join(OUTPUT_DIR, jobId);
+  const outputFormat = req.body.format || 'markdown';
   
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
   
@@ -116,7 +117,7 @@ app.post('/api/convert', upload.single('pdf'), handleMulterError, async (req, re
   
   // Start conversion process in background
   const baseUrl = `${req.protocol}://${req.get('host')}`;
-  processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl);
+  processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl, outputFormat);
   
   res.json({ jobId, message: 'OpenDataLoader conversion started' });
 });
@@ -130,13 +131,14 @@ app.post('/api/ocr', upload.single('pdf'), handleMulterError, async (req, res) =
   const jobId = Date.now().toString();
   const pdfPath = req.file.path;
   const outputDir = path.join(OUTPUT_DIR, jobId);
+  const outputFormat = req.body.format || 'txt';
   
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
   
   progressMap.set(jobId, { status: 'starting', progress: 0, totalPages: 0, currentPage: 0 });
   
   // Start OCR process in background
-  processOCR(jobId, pdfPath, outputDir);
+  processOCR(jobId, pdfPath, outputDir, outputFormat);
   
   res.json({ jobId, message: 'OCR started' });
 });
@@ -152,11 +154,23 @@ app.get('/api/progress/:jobId', (req, res) => {
 
 // Download result
 app.get('/api/download/:jobId', (req, res) => {
-  const outputFile = path.join(OUTPUT_DIR, req.params.jobId, 'result.txt');
-  if (!fs.existsSync(outputFile)) {
+  const outputDir = path.join(OUTPUT_DIR, req.params.jobId);
+  const progress = progressMap.get(req.params.jobId);
+  
+  // Check if PDF output was requested
+  if (progress && progress.outputFormat === 'pdf') {
+    const pdfFile = path.join(outputDir, 'result.pdf');
+    if (fs.existsSync(pdfFile)) {
+      return res.download(pdfFile, 'ocr-result.pdf');
+    }
+  }
+  
+  // Default to TXT
+  const txtFile = path.join(outputDir, 'result.txt');
+  if (!fs.existsSync(txtFile)) {
     return res.status(404).json({ error: 'Result not ready' });
   }
-  res.download(outputFile, 'ocr-result.txt');
+  res.download(txtFile, 'ocr-result.txt');
 });
 
 // Get result text
@@ -178,7 +192,7 @@ app.get('/api/images/:jobId/:filename', (req, res) => {
   res.sendFile(path.resolve(imageFile));
 });
 
-async function processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl) {
+async function processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl, format = 'markdown') {
   try {
     const { spawn } = require('child_process');
     
@@ -196,7 +210,7 @@ import json
 result = convert_pdf(
     "${pdfPath}",
     "${outputDir}",
-    format="markdown",
+    format="${format}",
     hybrid=False,
     ocr=False
 )
@@ -291,47 +305,129 @@ print(json.dumps(result))
   }
 }
 
-async function processOCR(jobId, pdfPath, outputDir) {
+async function processOCR(jobId, pdfPath, outputDir, outputFormat = 'txt') {
   try {
     progressMap.set(jobId, { status: 'converting', progress: 5, message: 'Converting PDF to images...' });
-    
+
     // Convert PDF to images
     const images = await pdfToImages(pdfPath, outputDir);
     const totalPages = images.length;
-    
-    progressMap.set(jobId, { status: 'processing', progress: 10, totalPages, currentPage: 0, message: `Processing ${totalPages} pages...` });
-    
-    const tesseract = require('tesseract.js');
-    let fullText = '';
-    
-    for (let i = 0; i < images.length; i++) {
-      const imagePath = images[i];
-      const pageNum = i + 1;
-      
-      progressMap.set(jobId, { 
-        status: 'processing', 
-        progress: 10 + Math.round((i / totalPages) * 80), 
-        totalPages, 
-        currentPage: pageNum,
-        message: `Processing page ${pageNum} of ${totalPages}...`
-      });
-      
-      const result = await tesseract.recognize(imagePath, 'eng+jpn', {
-        logger: m => {
-          // Optional: log progress
+
+    if (outputFormat === 'pdf') {
+      // Use native Tesseract CLI for PDF output
+      progressMap.set(jobId, { status: 'processing', progress: 10, totalPages, currentPage: 0, message: `Creating searchable PDF...` });
+
+      // For PDF output, we need to process each image and combine
+      // Tesseract can output PDF directly from images
+      const outputPdfPath = path.join(outputDir, 'result.pdf');
+
+      // Process each image and collect PDF outputs
+      const pdfPages = [];
+      for (let i = 0; i < images.length; i++) {
+        const imagePath = images[i];
+        const pageNum = i + 1;
+        const pagePdfPath = path.join(outputDir, `page_${pageNum}.pdf`);
+
+        progressMap.set(jobId, {
+          status: 'processing',
+          progress: 10 + Math.round((i / totalPages) * 80),
+          totalPages,
+          currentPage: pageNum,
+          message: `Processing page ${pageNum} of ${totalPages}...`
+        });
+
+        // Run Tesseract CLI to create PDF
+        await new Promise((resolve, reject) => {
+          const tesseractCmd = spawn('tesseract', [imagePath, pagePdfPath.replace('.pdf', ''), 'pdf', '-l', 'eng+jpn']);
+          let errorOutput = '';
+
+          tesseractCmd.stderr.on('data', (data) => {
+            errorOutput += data.toString();
+          });
+
+          tesseractCmd.on('close', (code) => {
+            if (code === 0) {
+              pdfPages.push(pagePdfPath);
+              resolve();
+            } else {
+              reject(new Error(`Tesseract failed: ${errorOutput}`));
+            }
+          });
+        });
+      }
+
+      // Combine PDF pages using PDFtk or similar if needed
+      // For now, if single page, just rename, otherwise we need a PDF merger
+      if (pdfPages.length === 1) {
+        fs.renameSync(pdfPages[0], outputPdfPath);
+      } else {
+        // Use qpdf or similar to combine PDFs
+        try {
+          const qpdfCmd = spawn('qpdf', ['--empty', '--pages', ...pdfPages, '--', outputPdfPath]);
+          await new Promise((resolve, reject) => {
+            let errorOutput = '';
+            qpdfCmd.stderr.on('data', (data) => errorOutput += data.toString());
+            qpdfCmd.on('close', (code) => {
+              if (code === 0) resolve();
+              else reject(new Error(`PDF merge failed: ${errorOutput}`));
+            });
+          });
+        } catch (mergeError) {
+          // Fallback: just use the first page PDF
+          console.warn('PDF merge failed, using first page:', mergeError.message);
+          fs.renameSync(pdfPages[0], outputPdfPath);
         }
-      });
-      
-      fullText += `\n--- Page ${pageNum} ---\n`;
-      fullText += result.data.text;
-      fullText += '\n';
+      }
+
+      // Also create TXT for preview
+      const tesseract = require('tesseract.js');
+      let fullText = '';
+      for (let i = 0; i < Math.min(images.length, 3); i++) {
+        const result = await tesseract.recognize(images[i], 'eng+jpn');
+        fullText += `\n--- Page ${i + 1} ---\n${result.data.text}\n`;
+      }
+      if (images.length > 3) {
+        fullText += `\n... and ${images.length - 3} more pages\n`;
+      }
+      fs.writeFileSync(path.join(outputDir, 'result.txt'), fullText + '\n\n[PDF output available for download]');
+
+      progressMap.set(jobId, { status: 'completed', progress: 100, message: 'PDF OCR completed!', totalPages, currentPage: totalPages, outputFormat: 'pdf' });
+    } else {
+      // TXT output using tesseract.js
+      progressMap.set(jobId, { status: 'processing', progress: 10, totalPages, currentPage: 0, message: `Processing ${totalPages} pages...` });
+
+      const tesseract = require('tesseract.js');
+      let fullText = '';
+
+      for (let i = 0; i < images.length; i++) {
+        const imagePath = images[i];
+        const pageNum = i + 1;
+
+        progressMap.set(jobId, {
+          status: 'processing',
+          progress: 10 + Math.round((i / totalPages) * 80),
+          totalPages,
+          currentPage: pageNum,
+          message: `Processing page ${pageNum} of ${totalPages}...`
+        });
+
+        const result = await tesseract.recognize(imagePath, 'eng+jpn', {
+          logger: m => {
+            // Optional: log progress
+          }
+        });
+
+        fullText += `\n--- Page ${pageNum} ---\n`;
+        fullText += result.data.text;
+        fullText += '\n';
+      }
+
+      // Save result
+      fs.writeFileSync(path.join(outputDir, 'result.txt'), fullText);
+
+      progressMap.set(jobId, { status: 'completed', progress: 100, message: 'OCR completed!', totalPages, currentPage: totalPages, outputFormat: 'txt' });
     }
-    
-    // Save result
-    fs.writeFileSync(path.join(outputDir, 'result.txt'), fullText);
-    
-    progressMap.set(jobId, { status: 'completed', progress: 100, message: 'OCR completed!', totalPages, currentPage: totalPages });
-    
+
     // Cleanup PDF and images after processing
     setTimeout(() => {
       try {
@@ -341,7 +437,7 @@ async function processOCR(jobId, pdfPath, outputDir) {
         console.error('Cleanup error:', e);
       }
     }, 60000); // Cleanup after 1 minute
-    
+
   } catch (error) {
     console.error('OCR Error:', error);
     logError(`OCR Job ${jobId} failed: ${error.message}`);
