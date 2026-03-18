@@ -146,10 +146,26 @@ app.post('/api/ocr', upload.single('pdf'), handleMulterError, async (req, res) =
 // Progress endpoint
 app.get('/api/progress/:jobId', (req, res) => {
   const progress = progressMap.get(req.params.jobId);
-  if (!progress) {
-    return res.status(404).json({ error: 'Job not found' });
+  if (progress) {
+    return res.json(progress);
   }
-  res.json(progress);
+  
+  // Fallback: check if result file exists (job completed but server restarted)
+  const outputDir = path.join(OUTPUT_DIR, req.params.jobId);
+  if (fs.existsSync(outputDir)) {
+    const files = fs.readdirSync(outputDir);
+    const hasResult = files.some(f => f.startsWith('result.'));
+    if (hasResult) {
+      return res.json({
+        status: 'completed',
+        progress: 100,
+        message: 'Processing completed!',
+        recovered: true
+      });
+    }
+  }
+  
+  return res.status(404).json({ error: 'Job not found' });
 });
 
 // Download result
@@ -411,12 +427,11 @@ async function processOCR(jobId, pdfPath, outputDir, outputFormat = 'txt') {
         });
       }
 
-      // Combine PDF pages using PDFtk or similar if needed
-      // For now, if single page, just rename, otherwise we need a PDF merger
+      // Combine PDF pages
       if (pdfPages.length === 1) {
         fs.renameSync(pdfPages[0], outputPdfPath);
-      } else {
-        // Use qpdf or similar to combine PDFs
+      } else if (pdfPages.length <= 50) {
+        // Use qpdf for small number of pages
         try {
           const qpdfCmd = spawn('qpdf', ['--empty', '--pages', ...pdfPages, '--', outputPdfPath]);
           await new Promise((resolve, reject) => {
@@ -428,8 +443,39 @@ async function processOCR(jobId, pdfPath, outputDir, outputFormat = 'txt') {
             });
           });
         } catch (mergeError) {
-          // Fallback: just use the first page PDF
           console.warn('PDF merge failed, using first page:', mergeError.message);
+          fs.renameSync(pdfPages[0], outputPdfPath);
+        }
+      } else {
+        // Batch merge for large PDFs to avoid command line length limits
+        try {
+          progressMap.set(jobId, { status: 'processing', progress: 90, totalPages, currentPage: totalPages, message: `Merging ${totalPages} pages (batch mode)...` });
+          
+          const batchSize = 50;
+          let mergedPdf = pdfPages[0];
+          let batchCount = 0;
+          
+          for (let i = batchSize; i < pdfPages.length; i += batchSize) {
+            const batch = pdfPages.slice(i, i + batchSize);
+            const batchOutput = path.join(outputDir, `merged_batch_${batchCount}.pdf`);
+            
+            const qpdfCmd = spawn('qpdf', [mergedPdf, '--pages', mergedPdf, ...batch, '--', batchOutput]);
+            await new Promise((resolve, reject) => {
+              let errorOutput = '';
+              qpdfCmd.stderr.on('data', (data) => errorOutput += data.toString());
+              qpdfCmd.on('close', (code) => {
+                if (code === 0) resolve();
+                else reject(new Error(`Batch merge failed: ${errorOutput}`));
+              });
+            });
+            
+            mergedPdf = batchOutput;
+            batchCount++;
+          }
+          
+          fs.renameSync(mergedPdf, outputPdfPath);
+        } catch (mergeError) {
+          console.warn('PDF batch merge failed, using first page:', mergeError.message);
           fs.renameSync(pdfPages[0], outputPdfPath);
         }
       }
