@@ -334,6 +334,39 @@
         let currentOutputFormat = 'txt';
         let currentHasImages = false;
 
+        // LocalStorage keys
+        const STORAGE_KEY_BACKEND = 'pdfOcr_backend';
+        const STORAGE_KEY_FORMAT = 'pdfOcr_format';
+
+        // Load saved preferences
+        function loadSavedPreferences() {
+            const savedBackend = localStorage.getItem(STORAGE_KEY_BACKEND);
+            const savedFormat = localStorage.getItem(STORAGE_KEY_FORMAT);
+            
+            if (savedBackend && (savedBackend === 'tesseract' || savedBackend === 'opendataloader')) {
+                selectedBackend = savedBackend;
+                // Update UI
+                if (savedBackend === 'tesseract') {
+                    tesseractOption.classList.add('selected');
+                    opendataloaderOption.classList.remove('selected');
+                } else {
+                    opendataloaderOption.classList.add('selected');
+                    tesseractOption.classList.remove('selected');
+                }
+            }
+            
+            // Select saved format if valid for current backend
+            const validFormats = FORMATS[selectedBackend].map(f => f.value);
+            const formatToUse = savedFormat && validFormats.includes(savedFormat) ? savedFormat : null;
+            renderFormatOptions(formatToUse);
+        }
+
+        // Save preferences
+        function savePreferences() {
+            localStorage.setItem(STORAGE_KEY_BACKEND, selectedBackend);
+            localStorage.setItem(STORAGE_KEY_FORMAT, selectedFormat);
+        }
+
         // Format definitions
         const FORMATS = {
             tesseract: [
@@ -349,13 +382,18 @@
         };
 
         // Format selector rendering
-        function renderFormatOptions() {
+        function renderFormatOptions(preselectFormat = null) {
             const container = document.getElementById('formatOptions');
             const formats = FORMATS[selectedBackend];
             
-            container.innerHTML = formats.map((fmt, idx) => `
-                <label class="backend-option ${idx === 0 ? 'selected' : ''}" data-format="${fmt.value}">
-                    <input type="radio" name="format" value="${fmt.value}" ${idx === 0 ? 'checked' : ''}>
+            // Determine which format to preselect
+            const formatToSelect = preselectFormat && formats.find(f => f.value === preselectFormat) 
+                ? preselectFormat 
+                : formats[0].value;
+            
+            container.innerHTML = formats.map((fmt) => `
+                <label class="backend-option ${fmt.value === formatToSelect ? 'selected' : ''}" data-format="${fmt.value}">
+                    <input type="radio" name="format" value="${fmt.value}" ${fmt.value === formatToSelect ? 'checked' : ''}>
                     <div class="backend-name">${fmt.name}</div>
                     <div class="backend-desc">${fmt.desc}</div>
                 </label>
@@ -367,10 +405,11 @@
                     container.querySelectorAll('.backend-option').forEach(o => o.classList.remove('selected'));
                     opt.classList.add('selected');
                     selectedFormat = opt.dataset.format;
+                    savePreferences();
                 });
             });
             
-            selectedFormat = formats[0].value;
+            selectedFormat = formatToSelect;
         }
 
         // Backend selection
@@ -378,18 +417,20 @@
             selectedBackend = 'tesseract';
             tesseractOption.classList.add('selected');
             opendataloaderOption.classList.remove('selected');
-            renderFormatOptions();
+            renderFormatOptions(null); // Use default format
+            savePreferences();
         });
 
         opendataloaderOption.addEventListener('click', () => {
             selectedBackend = 'opendataloader';
             opendataloaderOption.classList.add('selected');
             tesseractOption.classList.remove('selected');
-            renderFormatOptions();
+            renderFormatOptions(null); // Use default format
+            savePreferences();
         });
 
-        // Initialize format options
-        renderFormatOptions();
+        // Initialize with saved preferences
+        loadSavedPreferences();
 
         // Drag & drop
         uploadArea.addEventListener('click', () => fileInput.click());
