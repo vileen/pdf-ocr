@@ -332,6 +332,7 @@
         let selectedBackend = 'tesseract';
         let selectedFormat = 'txt';
         let currentOutputFormat = 'txt';
+        let currentHasImages = false;
 
         // Format definitions
         const FORMATS = {
@@ -494,6 +495,7 @@
                     if (data.status === 'completed') {
                         clearInterval(interval);
                         currentOutputFormat = data.outputFormat || 'txt';
+                        currentHasImages = data.hasImages || false;
                         showResult(jobId);
                     } else if (data.status === 'error') {
                         clearInterval(interval);
@@ -517,7 +519,9 @@
                 resultText.textContent = data.text;
 
                 // Update download button based on output format
-                if (currentOutputFormat === 'pdf') {
+                if (currentHasImages) {
+                    downloadBtn.textContent = '⬇️ Download ZIP (with images)';
+                } else if (currentOutputFormat === 'pdf') {
                     downloadBtn.textContent = '⬇️ Download PDF';
                 } else if (selectedBackend === 'opendataloader') {
                     const formatNames = { markdown: 'MD', txt: 'TXT', html: 'HTML', json: 'JSON' };
@@ -532,7 +536,11 @@
 
         downloadBtn.addEventListener('click', () => {
             if (!currentJobId) return;
-            window.location.href = `${API_URL}/api/download/${currentJobId}`;
+            if (currentHasImages) {
+                window.location.href = `${API_URL}/api/download/${currentJobId}/zip`;
+            } else {
+                window.location.href = `${API_URL}/api/download/${currentJobId}`;
+            }
         });
 
         copyBtn.addEventListener('click', () => {

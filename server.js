@@ -165,31 +165,79 @@ app.get('/api/download/:jobId', (req, res) => {
     }
   }
   
-  // Default to TXT
-  const txtFile = path.join(outputDir, 'result.txt');
-  if (!fs.existsSync(txtFile)) {
-    return res.status(404).json({ error: 'Result not ready' });
+  // Find the result file with any extension
+  const files = fs.readdirSync(outputDir);
+  const resultFile = files.find(f => f.startsWith('result.') && !f.endsWith('.zip') && f !== 'result.pdf');
+  
+  if (resultFile) {
+    const ext = path.extname(resultFile);
+    const mimeTypes = {
+      '.md': 'text/markdown',
+      '.txt': 'text/plain',
+      '.html': 'text/html',
+      '.json': 'application/json'
+    };
+    res.setHeader('Content-Type', mimeTypes[ext] || 'text/plain');
+    return res.download(path.join(outputDir, resultFile), `ocr-result${ext}`);
   }
-  res.download(txtFile, 'ocr-result.txt');
+  
+  res.status(404).json({ error: 'Result not ready' });
 });
 
 // Get result text
 app.get('/api/result/:jobId', (req, res) => {
-  const outputFile = path.join(OUTPUT_DIR, req.params.jobId, 'result.txt');
-  if (!fs.existsSync(outputFile)) {
+  const outputDir = path.join(OUTPUT_DIR, req.params.jobId);
+  
+  // Find the result file with any extension
+  const files = fs.readdirSync(outputDir);
+  const resultFile = files.find(f => f.startsWith('result.') && !f.endsWith('.zip'));
+  
+  if (!resultFile) {
     return res.status(404).json({ error: 'Result not ready' });
   }
-  const text = fs.readFileSync(outputFile, 'utf-8');
+  
+  const text = fs.readFileSync(path.join(outputDir, resultFile), 'utf-8');
   res.json({ text });
 });
 
-// Get extracted image
-app.get('/api/images/:jobId/:filename', (req, res) => {
-  const imageFile = path.join(OUTPUT_DIR, req.params.jobId, 'images', req.params.filename);
-  if (!fs.existsSync(imageFile)) {
-    return res.status(404).json({ error: 'Image not found' });
+// Download result as ZIP (with assets)
+app.get('/api/download/:jobId/zip', async (req, res) => {
+  const outputDir = path.join(OUTPUT_DIR, req.params.jobId);
+  const zipFile = path.join(outputDir, 'result.zip');
+  
+  if (!fs.existsSync(outputDir)) {
+    return res.status(404).json({ error: 'Result not ready' });
   }
-  res.sendFile(path.resolve(imageFile));
+  
+  try {
+    // Create ZIP using native zip command
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
+    
+    // Find the result file (could be .md, .txt, .html, .json)
+    const files = fs.readdirSync(outputDir);
+    const resultFile = files.find(f => f.startsWith('result.') && !f.endsWith('.zip'));
+    
+    if (!resultFile) {
+      return res.status(404).json({ error: 'Result file not found' });
+    }
+    
+    // Create ZIP with result file and images folder if exists
+    const imagesDir = path.join(outputDir, 'images');
+    const hasImages = fs.existsSync(imagesDir);
+    
+    if (hasImages) {
+      await execAsync(`cd "${outputDir}" && zip -r result.zip "${resultFile}" images/`);
+    } else {
+      await execAsync(`cd "${outputDir}" && zip result.zip "${resultFile}"`);
+    }
+    
+    res.download(zipFile, 'ocr-result.zip');
+  } catch (err) {
+    console.error('ZIP creation error:', err);
+    res.status(500).json({ error: 'Failed to create ZIP' });
+  }
 });
 
 async function processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl, format = 'markdown') {
@@ -242,12 +290,14 @@ print(json.dumps(result))
           if (result.success) {
             // Read the converted content
             let content = fs.readFileSync(result.output, 'utf-8');
+            const originalExtension = path.extname(result.output);
             
             // Check for images folder
             const outputMdPath = path.dirname(result.output);
             const imagesFolderName = path.basename(result.output, path.extname(result.output)) + '_images';
             const imagesSourceDir = path.join(outputMdPath, imagesFolderName);
             const imagesTargetDir = path.join(outputDir, 'images');
+            let hasImages = false;
             
             if (fs.existsSync(imagesSourceDir)) {
               // Copy images folder to output
@@ -260,14 +310,17 @@ print(json.dumps(result))
                 );
               }
               
-              // Update markdown links to use API endpoint
+              // Update markdown links to use relative path for ZIP export
               content = content.replace(
                 new RegExp(`${imagesFolderName}/`, 'g'),
-                `${baseUrl}/api/images/${jobId}/`
+                `images/`
               );
+              hasImages = true;
             }
             
-            fs.writeFileSync(path.join(outputDir, 'result.txt'), content);
+            // Save with original extension (e.g., .md, .html, .json)
+            const outputFileName = 'result' + originalExtension;
+            fs.writeFileSync(path.join(outputDir, outputFileName), content);
             
             progressMap.set(jobId, { 
               status: 'completed', 
@@ -275,7 +328,7 @@ print(json.dumps(result))
               message: 'OpenDataLoader conversion completed!',
               totalPages: 1,
               currentPage: 1,
-              hasImages: fs.existsSync(imagesSourceDir)
+              hasImages: hasImages
             });
           } else {
             throw new Error(result.error || 'Conversion failed');
