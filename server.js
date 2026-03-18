@@ -360,6 +360,8 @@ print(json.dumps(result))
 
 async function processOCR(jobId, pdfPath, outputDir, outputFormat = 'txt') {
   try {
+    const { spawn } = require('child_process');
+    
     progressMap.set(jobId, { status: 'converting', progress: 5, message: 'Converting PDF to images...' });
 
     // Convert PDF to images
