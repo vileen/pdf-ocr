@@ -115,7 +115,8 @@ app.post('/api/convert', upload.single('pdf'), handleMulterError, async (req, re
   progressMap.set(jobId, { status: 'starting', progress: 0, message: 'Starting OpenDataLoader...' });
   
   // Start conversion process in background
-  processOpenDataLoader(jobId, pdfPath, outputDir);
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl);
   
   res.json({ jobId, message: 'OpenDataLoader conversion started' });
 });
@@ -168,14 +169,23 @@ app.get('/api/result/:jobId', (req, res) => {
   res.json({ text });
 });
 
-async function processOpenDataLoader(jobId, pdfPath, outputDir) {
+// Get extracted image
+app.get('/api/images/:jobId/:filename', (req, res) => {
+  const imageFile = path.join(OUTPUT_DIR, req.params.jobId, 'images', req.params.filename);
+  if (!fs.existsSync(imageFile)) {
+    return res.status(404).json({ error: 'Image not found' });
+  }
+  res.sendFile(path.resolve(imageFile));
+});
+
+async function processOpenDataLoader(jobId, pdfPath, outputDir, baseUrl) {
   try {
     const { spawn } = require('child_process');
     
     progressMap.set(jobId, { status: 'processing', progress: 10, message: 'Converting with OpenDataLoader...' });
     
-    // Run OpenDataLoader Python script
-    const pythonProcess = spawn('python', [
+    // Run OpenDataLoader Python script with Java PATH
+    const pythonProcess = spawn('python3', [
       '-c',
       `
 import sys
@@ -192,7 +202,12 @@ result = convert_pdf(
 )
 print(json.dumps(result))
       `
-    ]);
+    ], {
+      env: {
+        ...process.env,
+        PATH: `/opt/homebrew/opt/openjdk/bin:${process.env.PATH}`
+      }
+    });
     
     let output = '';
     let errorOutput = '';
@@ -212,7 +227,32 @@ print(json.dumps(result))
           const result = JSON.parse(output);
           if (result.success) {
             // Read the converted content
-            const content = fs.readFileSync(result.output, 'utf-8');
+            let content = fs.readFileSync(result.output, 'utf-8');
+            
+            // Check for images folder
+            const outputMdPath = path.dirname(result.output);
+            const imagesFolderName = path.basename(result.output, path.extname(result.output)) + '_images';
+            const imagesSourceDir = path.join(outputMdPath, imagesFolderName);
+            const imagesTargetDir = path.join(outputDir, 'images');
+            
+            if (fs.existsSync(imagesSourceDir)) {
+              // Copy images folder to output
+              fs.mkdirSync(imagesTargetDir, { recursive: true });
+              const imageFiles = fs.readdirSync(imagesSourceDir);
+              for (const file of imageFiles) {
+                fs.copyFileSync(
+                  path.join(imagesSourceDir, file),
+                  path.join(imagesTargetDir, file)
+                );
+              }
+              
+              // Update markdown links to use API endpoint
+              content = content.replace(
+                new RegExp(`${imagesFolderName}/`, 'g'),
+                `${baseUrl}/api/images/${jobId}/`
+              );
+            }
+            
             fs.writeFileSync(path.join(outputDir, 'result.txt'), content);
             
             progressMap.set(jobId, { 
@@ -220,7 +260,8 @@ print(json.dumps(result))
               progress: 100, 
               message: 'OpenDataLoader conversion completed!',
               totalPages: 1,
-              currentPage: 1 
+              currentPage: 1,
+              hasImages: fs.existsSync(imagesSourceDir)
             });
           } else {
             throw new Error(result.error || 'Conversion failed');
