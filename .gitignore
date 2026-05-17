@@ -23,3 +23,6 @@ Thumbs.db
 
 # Training data (large files)
 *.traineddata
+
+# Local assistant notes
+AGENTS.md
